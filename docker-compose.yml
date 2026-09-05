@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: eslaah_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: eslaah_db
+      POSTGRES_USER: eslaah_admin
+      POSTGRES_PASSWORD: super_secure_spatial_password_2026
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - eslaah_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eslaah_admin -d eslaah_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: eslaah_redis
+    restart: always
+    command: >
+      redis-server 
+      --maxmemory 1024mb 
+      --maxmemory-policy noeviction 
+      --appendonly yes 
+      --appendfsync everysec
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - eslaah_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+networks:
+  eslaah_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local

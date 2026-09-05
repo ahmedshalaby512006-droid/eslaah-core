@@ -1,0 +1,203 @@
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [postgis, uuidOssp(map: "uuid-ossp"), btreeGist(map: "btree_gist")]
+}
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+enum UserRole {
+  CUSTOMER
+  TECHNICIAN
+  ENGINEER
+  ADMIN
+}
+
+enum VehicleType {
+  SEDAN
+  SUV
+  MOTORCYCLE
+  HEAVY_TRUCK
+  BUS
+}
+
+enum MalfunctionCategory {
+  ELECTRICAL
+  MECHANICAL
+  TIRE_AND_WHEEL
+  BODY_AND_CHASSIS
+  BATTERY_JUMP
+  TOWING
+}
+
+enum VerificationStatus {
+  PENDING
+  EXAM_PASSED
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+enum RequestStatus {
+  QUEUED
+  DISPATCHING
+  ACCEPTED
+  ARRIVED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  UNFULFILLED
+}
+
+enum DisputeStatus {
+  PENDING
+  INVESTIGATING
+  RESOLVED
+  REJECTED
+}
+
+enum ComplaintAuthorRole {
+  CUSTOMER
+  TECHNICIAN
+}
+
+model User {
+  id                 String             @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  nationalId         String?            @unique @map("national_id") @db.VarChar(32)
+  phoneNumber        String             @unique @map("phone_number") @db.VarChar(20)
+  email              String             @unique @map("email") @db.VarChar(255)
+  fullName           String             @map("full_name") @db.VarChar(128)
+  passwordHash       String             @map("password_hash") @db.VarChar(255)
+  role               UserRole           @default(CUSTOMER)
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz
+
+  technicianProfile  TechnicianProfile?
+  customerRequests   AssistanceRequest[] @relation("CustomerOrders")
+  authoredDisputes   Dispute[]           @relation("AuthoredDisputes")
+  receivedDisputes   Dispute[]           @relation("TargetedDisputes")
+  auditLogs          AuditLog[]
+
+  @@index([phoneNumber], name: "idx_users_phone")
+  @@index([email], name: "idx_users_email")
+  @@map("users")
+}
+
+model TechnicianProfile {
+  id                    String                @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  userId                String                @unique @map("user_id") @db.Uuid
+  user                  User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  verificationStatus    VerificationStatus    @default(PENDING) @map("verification_status")
+  examScore             Float?                @map("exam_score")
+  isOnline              Boolean               @default(false) @map("is_online")
+  isLocked              Boolean               @default(false) @map("is_locked")
+  
+  vehicleSpecialties    VehicleType[]         @map("vehicle_specialties")
+  malfunctionSpecialties MalfunctionCategory[] @map("malfunction_specialties")
+  
+  averageQualityRating  Decimal               @default(5.0) @map("avg_quality_rating") @db.Decimal(3, 2)
+  averagePriceRating    Decimal               @default(5.0) @map("avg_price_rating") @db.Decimal(3, 2)
+  totalCompletedJobs    Int                   @default(0) @map("total_completed_jobs")
+  
+  currentLocation       Unsupported("geometry(Point, 4326)")? @map("current_location")
+
+  assignedRequests      AssistanceRequest[]
+
+  @@index([isOnline, verificationStatus], name: "idx_technicians_dispatch_readiness")
+  @@map("technician_profiles")
+}
+
+model AssistanceRequest {
+  id                    String              @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  customerId            String              @map("customer_id") @db.Uuid
+  customer              User                @relation("CustomerOrders", fields: [customerId], references: [id])
+  technicianId          String?             @map("technician_id") @db.Uuid
+  technician            TechnicianProfile?  @relation(fields: [technicianId], references: [id])
+  
+  vehicleType           VehicleType         @map("vehicle_type")
+  malfunctionCategory   MalfunctionCategory @map("malfunction_category")
+  status                RequestStatus       @default(QUEUED)
+  
+  pickupLocation        Unsupported("geometry(Point, 4326)")? @map("pickup_location")
+  addressDescription    String?             @map("address_description") @db.Text
+  
+  fareAmount            Decimal?            @map("fare_amount") @db.Decimal(10, 2)
+  estimatedArrivalMinutes Int?              @map("estimated_arrival_minutes")
+  
+  createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  acceptedAt            DateTime?           @map("accepted_at") @db.Timestamptz
+  completedAt           DateTime?           @map("completed_at") @db.Timestamptz
+  
+  rating                Rating?
+  disputes              Dispute[]
+  messages              Message[]
+
+  @@index([status], name: "idx_requests_status")
+  @@index([customerId, status], name: "idx_customer_active_req")
+  @@map("assistance_requests")
+}
+
+model Rating {
+  id                 String            @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  requestId          String            @unique @map("request_id") @db.Uuid
+  request            AssistanceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  
+  qualityScore       Int               @map("quality_score") @db.SmallInt
+  priceFairnessScore Int               @map("price_fairness_score") @db.SmallInt
+  comment            String?           @db.VarChar(500)
+  createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("ratings")
+}
+
+model Dispute {
+  id                String              @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  requestId         String              @map("request_id") @db.Uuid
+  request           AssistanceRequest   @relation(fields: [requestId], references: [id])
+  authorId          String              @map("author_id") @db.Uuid
+  author            User                @relation("AuthoredDisputes", fields: [authorId], references: [id])
+  targetUserId      String              @map("target_user_id") @db.Uuid
+  targetUser        User                @relation("TargetedDisputes", fields: [targetUserId], references: [id])
+  
+  authorRole        ComplaintAuthorRole @map("author_role")
+  category          String              @db.VarChar(64)
+  description       String              @db.Text
+  status            DisputeStatus       @default(PENDING)
+  adminNotes        String?             @map("admin_notes") @db.Text
+  
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  resolvedAt        DateTime?           @map("resolved_at") @db.Timestamptz
+
+  @@map("disputes")
+}
+
+model AuditLog {
+  id                BigInt            @id @default(autoincrement())
+  userId            String?           @map("user_id") @db.Uuid
+  user              User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action            String            @db.VarChar(64)
+  entityType        String            @map("entity_type") @db.VarChar(64)
+  entityId          String            @map("entity_id") @db.VarChar(64)
+  payloadJson       Json              @map("payload_json")
+  clientIp          String?           @map("client_ip") @db.VarChar(45)
+  timestamp         DateTime          @default(now()) @db.Timestamptz
+
+  @@index([entityType, entityId], name: "idx_audit_entity")
+  @@map("audit_logs")
+}
+model Message {
+  id         String            @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  requestId  String            @map("request_id") @db.Uuid
+  senderId   String            @map("sender_id") @db.Uuid
+  senderRole String            @map("sender_role")
+  text       String
+  createdAt  DateTime          @default(now()) @map("created_at") @db.Timestamptz
+
+  request    AssistanceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@map("messages")
+}
