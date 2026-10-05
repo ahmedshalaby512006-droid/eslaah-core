@@ -1,3 +1,4 @@
+﻿import { Server as SocketIOServer } from 'socket.io';
 import fastify from 'fastify';
 import cors from '@fastify/cors';
 import sensible from '@fastify/sensible';
@@ -10,8 +11,7 @@ dotenv.config();
 import { requestRoutes } from './modules/requests/request.routes';
 import { ratingRoutes } from './modules/ratings/rating.routes';
 import { disputeRoutes } from './modules/disputes/dispute.routes';
-
-
+import { adminRoutes } from './modules/admin/admin.routes';
 
 const app = fastify({ logger: true });
 const prisma = new PrismaClient();
@@ -28,11 +28,10 @@ app.register(fastifyJwt, {
 });
 
 app.register(authRoutes, { prefix: '/api/v1/auth' });
-
-// التسجيل مع باقي الـ Plugins
 app.register(requestRoutes, { prefix: '/api/v1/requests' });
 app.register(ratingRoutes, { prefix: '/api/v1/ratings' });
 app.register(disputeRoutes, { prefix: '/api/v1/disputes' });
+app.register(adminRoutes, { prefix: '/api/v1/admin' });
 
 app.get('/health', async () => {
   const redisPing = await redis.ping();
@@ -47,9 +46,27 @@ app.get('/health', async () => {
   };
 });
 
+let io: SocketIOServer | undefined;
+export const getIO = () => io;
+
 const start = async () => {
   try {
     const port = Number(process.env.PORT) || 3000;
+    await app.ready();
+    io = new SocketIOServer(app.server, {
+      cors: {
+        origin: 'http://localhost:5173',
+        credentials: true
+      }
+    });
+
+    io.on('connection', (socket) => {
+      console.log('Socket client connected:', socket.id);
+      socket.on('disconnect', () => {
+        console.log('Socket client disconnected:', socket.id);
+      });
+    });
+
     await app.listen({ port, host: '0.0.0.0' });
     console.log(`🚀 Eslaah Core running on http://localhost:${port}`);
   } catch (err) {

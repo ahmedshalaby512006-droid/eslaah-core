@@ -1,3 +1,7 @@
 node_modules
 dist
 .env
+clean-db.js
+seed-admin.js
+seed-admin2.js
+*.log

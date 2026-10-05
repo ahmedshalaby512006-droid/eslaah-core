@@ -1,6 +1,7 @@
-import { FastifyReply, FastifyRequest } from 'fastify';
+﻿import { FastifyReply, FastifyRequest } from 'fastify';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
+import { getIO } from '../../server';
 
 const prisma = new PrismaClient();
 
@@ -34,5 +35,21 @@ export async function createRatingHandler(request: FastifyRequest, reply: Fastif
     },
   });
 
+  if (requestRecord.technicianId) {
+    const agg = await prisma.rating.aggregate({
+      where: { request: { technicianId: requestRecord.technicianId } },
+      _avg: { qualityScore: true, priceFairnessScore: true }
+    });
+    
+    await prisma.technicianProfile.update({
+      where: { id: requestRecord.technicianId },
+      data: {
+        averageQualityRating: agg._avg.qualityScore || 5,
+        averagePriceRating: agg._avg.priceFairnessScore || 5,
+      }
+    });
+  }
+
+  getIO()?.emit('data_updated');
   return reply.status(201).send(rating);
 }
