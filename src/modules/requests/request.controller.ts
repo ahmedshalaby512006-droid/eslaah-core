@@ -166,7 +166,25 @@ export async function getActiveCustomerRequestHandler(request: FastifyRequest, r
     },
   });
 
-  return reply.send(activeReq || null);
+  if (!activeReq) return reply.send(null);
+
+  // If request is QUEUED, filter out technicians who are currently busy with another active job
+  // When that technician finishes their job, this offer will automatically re-appear!
+  if (activeReq.status === 'QUEUED' && activeReq.offers && activeReq.offers.length > 0) {
+    const candidateTechIds = activeReq.offers.map((o: any) => o.technicianId);
+    const busyJobs = await prisma.assistanceRequest.findMany({
+      where: {
+        technicianId: { in: candidateTechIds },
+        status: { in: ['DISPATCHING', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS'] }
+      },
+      select: { technicianId: true }
+    });
+    const busyTechIdSet = new Set(busyJobs.map((b: any) => b.technicianId));
+
+    activeReq.offers = activeReq.offers.filter((o: any) => !busyTechIdSet.has(o.technicianId));
+  }
+
+  return reply.send(activeReq);
 }
 
 export async function acceptRequestHandler(request: any, reply: any) {
@@ -181,6 +199,17 @@ export async function acceptRequestHandler(request: any, reply: any) {
     techProfile = await prisma.technicianProfile.create({
       data: { userId, isOnline: true },
     });
+  }
+
+  // Prevent sending offers if technician currently has an active job
+  const activeJob = await prisma.assistanceRequest.findFirst({
+    where: {
+      technicianId: techProfile.id,
+      status: { in: ['DISPATCHING', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS'] }
+    }
+  });
+  if (activeJob) {
+    return reply.status(400).send({ message: 'Complete your current active job first before offering new services.' });
   }
 
   const req = await prisma.assistanceRequest.findUnique({ where: { id } });
@@ -217,21 +246,59 @@ export async function acceptTechnicianOfferHandler(request: any, reply: any) {
   const { technicianId } = request.body;
   const customerId = request.user.id;
   
-  const updated = await prisma.assistanceRequest.updateMany({
-    where: { id, customerId, status: 'QUEUED' },
-    data: { status: 'ACCEPTED', technicianId, acceptedAt: new Date() }
-  });
+  try {
+    await prisma.$transaction(async (tx) => {
+      // 1. Verify this customer's request is still in QUEUED status
+      const customerReq = await tx.assistanceRequest.findFirst({
+        where: { id, customerId, status: 'QUEUED' }
+      });
+      if (!customerReq) {
+        throw new Error('REQUEST_NOT_AVAILABLE');
+      }
 
-  if (updated.count === 0) {
-    return reply.status(400).send({ message: 'Request not found or already accepted.' });
+      // 2. Concurrency Lock: Check if technician already took another job at the exact same moment
+      const existingActiveJob = await tx.assistanceRequest.findFirst({
+        where: {
+          technicianId,
+          status: { in: ['DISPATCHING', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS'] }
+        }
+      });
+      if (existingActiveJob) {
+        throw new Error('TECHNICIAN_BUSY');
+      }
+
+      // 3. Atomically accept this technician for this request
+      await tx.assistanceRequest.update({
+        where: { id },
+        data: {
+          status: 'ACCEPTED',
+          technicianId,
+          acceptedAt: new Date()
+        }
+      });
+
+      // 4. Delete all offers for THIS customer request
+      await tx.requestOffer.deleteMany({
+        where: { requestId: id }
+      });
+    });
+
+    getIO()?.emit('data_updated');
+    getIO()?.emit('request_accepted', { customerId, technicianId });
+    return reply.send({ success: true });
+  } catch (err: any) {
+    if (err.message === 'TECHNICIAN_BUSY') {
+      return reply.status(409).send({
+        message: 'عذراً، هذا الفني أصبح مرتبطاً بطلب صيانة نشط آخر في هذه اللحظة.'
+      });
+    }
+    if (err.message === 'REQUEST_NOT_AVAILABLE') {
+      return reply.status(409).send({
+        message: 'هذا الطلب لم يعد متاحاً أو تم قبوله بالفعل.'
+      });
+    }
+    return reply.status(400).send({ message: err.message || 'Failed to accept technician offer' });
   }
-
-  // Delete all offers for this request since one was accepted
-  await prisma.requestOffer.deleteMany({ where: { requestId: id } });
-
-  getIO()?.emit('data_updated');
-  getIO()?.emit('request_accepted', { customerId, technicianId });
-  return reply.send({ success: true });
 }
 
 export async function rejectTechnicianOfferHandler(request: any, reply: any) {
