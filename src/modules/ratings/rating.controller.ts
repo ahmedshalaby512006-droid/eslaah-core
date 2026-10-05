@@ -1,4 +1,4 @@
-﻿import { FastifyReply, FastifyRequest } from 'fastify';
+import { FastifyReply, FastifyRequest } from 'fastify';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import { getIO } from '../../server';
@@ -24,6 +24,13 @@ export async function createRatingHandler(request: FastifyRequest, reply: Fastif
 
   if (!requestRecord || requestRecord.customerId !== request.user.id) {
     return reply.status(403).send({ message: 'Unauthorized to rate this request' });
+  }
+
+  const existingRating = await prisma.rating.findUnique({
+    where: { requestId: result.data.requestId },
+  });
+  if (existingRating) {
+    return reply.status(400).send({ message: 'You have already rated this request.' });
   }
 
   const rating = await prisma.rating.create({
