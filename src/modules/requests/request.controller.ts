@@ -365,6 +365,7 @@ export async function cancelCustomerRequestHandler(request: FastifyRequest<{ Par
   await prisma.requestOffer.deleteMany({ where: { requestId: id } });
 
   getIO()?.emit('data_updated');
+  getIO()?.emit('request_cancelled', { requestId: id });
   return reply.status(200).send({ message: 'Request cancelled successfully.' });
 }
 
