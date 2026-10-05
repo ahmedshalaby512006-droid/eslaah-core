@@ -86,6 +86,14 @@ export async function loginHandler(request: FastifyRequest, reply: FastifyReply)
     });
   }
 
+  if (user.isBanned) {
+    return reply.status(403).send({
+      statusCode: 403,
+      error: 'Forbidden',
+      message: 'Account is suspended / تم حظر هذا الحساب من قبل الإدارة',
+    });
+  }
+
   const token = request.server.jwt.sign(
     { id: user.id, email: user.email, role: user.role as 'CUSTOMER' | 'TECHNICIAN' | 'ADMIN' },
     { expiresIn: '7d' }
@@ -94,12 +102,15 @@ export async function loginHandler(request: FastifyRequest, reply: FastifyReply)
   await prisma.user.update({
     where: { id: user.id },
     data: { isOnline: true }
-  }); getIO()?.emit('data_updated');
+  }); 
+  getIO()?.emit('data_updated');
+
   if (user.role === 'TECHNICIAN') {
     await prisma.technicianProfile.updateMany({
       where: { userId: user.id },
       data: { isOnline: true }
-    }); getIO()?.emit('data_updated');
+    }); 
+    getIO()?.emit('data_updated');
   }
 
   return reply.status(200).send({
@@ -139,7 +150,9 @@ export async function getMeHandler(request: FastifyRequest, reply: FastifyReply)
   }
 
   return reply.status(200).send(user);
-}export async function updateProfileHandler(request: FastifyRequest, reply: FastifyReply) {
+}
+
+export async function updateProfileHandler(request: FastifyRequest, reply: FastifyReply) {
   const userId = request.user.id;
   const { fullName, phoneNumber, nationalId, password } = request.body as any;
   let dataToUpdate: any = {
@@ -168,7 +181,6 @@ export async function getMeHandler(request: FastifyRequest, reply: FastifyReply)
   return reply.status(200).send(user);
 }
 
-
 export async function toggleOnlineStatusHandler(request: FastifyRequest, reply: FastifyReply) {
   const { isOnline } = request.body as any;
   const user = request.user;
@@ -186,7 +198,6 @@ export async function toggleOnlineStatusHandler(request: FastifyRequest, reply: 
   return reply.send(updated);
 }
 
-
 export async function verifyPasswordHandler(request: FastifyRequest, reply: FastifyReply) {
   const userId = request.user.id;
   const { password } = request.body as any;
@@ -200,7 +211,6 @@ export async function verifyPasswordHandler(request: FastifyRequest, reply: Fast
   return reply.send({ success: true });
 }
 
-
 export async function logoutHandler(request: FastifyRequest, reply: FastifyReply) {
   try {
     const userId = request.user?.id;
@@ -208,20 +218,21 @@ export async function logoutHandler(request: FastifyRequest, reply: FastifyReply
       await prisma.user.update({
         where: { id: userId },
         data: { isOnline: false }
-      }); getIO()?.emit('data_updated');
-      // also update technician profile if they have one so logic doesn't break
+      }); 
+      getIO()?.emit('data_updated');
+      
       const user = await prisma.user.findUnique({ where: { id: userId }});
       if (user?.role === 'TECHNICIAN') {
          await prisma.technicianProfile.updateMany({
            where: { userId },
            data: { isOnline: false }
-         }); getIO()?.emit('data_updated');
+         }); 
+         getIO()?.emit('data_updated');
       }
     }
   } catch (err) {}
   return reply.send({ success: true });
 }
-
 
 export async function pingHandler(request: FastifyRequest, reply: FastifyReply) {
   try {
@@ -235,7 +246,8 @@ export async function pingHandler(request: FastifyRequest, reply: FastifyReply) 
         await prisma.technicianProfile.updateMany({
           where: { userId },
           data: { isOnline: true }
-        }); getIO()?.emit('data_updated');
+        }); 
+        getIO()?.emit('data_updated');
       }
     }
   } catch (err) {}

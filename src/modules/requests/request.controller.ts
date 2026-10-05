@@ -4,21 +4,74 @@ import { PrismaClient } from '@prisma/client';
 import { createAssistanceRequestSchema, updateRequestStatusSchema } from './request.schema';
 
 async function extractCoordinates(input: string): Promise<{ lat: number; lng: number } | null> {
+  if (!input || typeof input !== 'string') return null;
+
+  // 1. Direct coordinate format: "lat, lng"
   const directMatch = input.match(/(-?\d+\.\d+),\s*(-?\d+\.\d+)/);
   if (directMatch) {
-    return { lat: parseFloat(directMatch[1]), lng: parseFloat(directMatch[2]) };
+    const lat = parseFloat(directMatch[1]);
+    const lng = parseFloat(directMatch[2]);
+    if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      return { lat, lng };
+    }
   }
 
-  if (input.includes('http')) {
+  // 2. Query parameters or path in URL without outbound network requests
+  const urlCoordMatch = input.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) || 
+                        input.match(/[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)/) ||
+                        input.match(/[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if (urlCoordMatch) {
+    const lat = parseFloat(urlCoordMatch[1]);
+    const lng = parseFloat(urlCoordMatch[2]);
+    if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      return { lat, lng };
+    }
+  }
+
+  // 3. For shortened links (e.g., maps.app.goo.gl, goo.gl), perform strict allowlisted resolution to prevent SSRF
+  if (input.includes('http://') || input.includes('https://')) {
     try {
-      const res = await fetch(input, { method: 'HEAD', redirect: 'follow' });
-      const finalUrl = res.url;
-      const urlMatch = finalUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) || finalUrl.match(/q=(-?\d+\.\d+),(-?\d+\.\d+)/);
-      if (urlMatch) {
-        return { lat: parseFloat(urlMatch[1]), lng: parseFloat(urlMatch[2]) };
+      const parsedUrl = new URL(input.trim());
+      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+        return null;
       }
-    } catch (e) {
-      console.error('Error resolving map url:', e);
+
+      const allowedHosts = [
+        'maps.google.com',
+        'www.google.com',
+        'google.com',
+        'maps.app.goo.gl',
+        'goo.gl',
+      ];
+      const host = parsedUrl.hostname.toLowerCase();
+      const isAllowed = allowedHosts.some(allowed => host === allowed || host.endsWith('.' + allowed));
+      if (!isAllowed) {
+        return null;
+      }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+
+      const res = await fetch(parsedUrl.toString(), {
+        method: 'HEAD',
+        redirect: 'follow',
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+
+      const finalUrl = res.url;
+      const resolvedMatch = finalUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) || 
+                            finalUrl.match(/[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)/) ||
+                            finalUrl.match(/[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)/);
+      if (resolvedMatch) {
+        const lat = parseFloat(resolvedMatch[1]);
+        const lng = parseFloat(resolvedMatch[2]);
+        if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+          return { lat, lng };
+        }
+      }
+    } catch {
+      // Safe fallback on network failure or abort
     }
   }
   return null;
@@ -169,7 +222,6 @@ export async function getActiveCustomerRequestHandler(request: FastifyRequest, r
   if (!activeReq) return reply.send(null);
 
   // If request is QUEUED, filter out technicians who are currently busy with another active job
-  // When that technician finishes their job, this offer will automatically re-appear!
   if (activeReq.status === 'QUEUED' && activeReq.offers && activeReq.offers.length > 0) {
     const candidateTechIds = activeReq.offers.map((o: any) => o.technicianId);
     const busyJobs = await prisma.assistanceRequest.findMany({
@@ -304,6 +356,20 @@ export async function acceptTechnicianOfferHandler(request: any, reply: any) {
 export async function rejectTechnicianOfferHandler(request: any, reply: any) {
   const { id } = request.params;
   const { technicianId } = request.body;
+  const userId = request.user.id;
+  const userRole = request.user.role;
+
+  const existingReq = await prisma.assistanceRequest.findUnique({
+    where: { id }
+  });
+
+  if (!existingReq) {
+    return reply.status(404).send({ message: 'Request not found' });
+  }
+
+  if (existingReq.customerId !== userId && userRole !== 'ADMIN') {
+    return reply.status(403).send({ message: 'Unauthorized to reject offers on this request' });
+  }
   
   await prisma.requestOffer.deleteMany({
     where: { requestId: id, technicianId }
@@ -318,6 +384,27 @@ export async function updateStatusHandler(request: FastifyRequest<{ Params: { id
   const result = updateRequestStatusSchema.safeParse(request.body);
   if (!result.success) {
     return reply.status(400).send({ message: result.error.issues[0].message });
+  }
+
+  const existingReq = await prisma.assistanceRequest.findUnique({
+    where: { id }
+  });
+
+  if (!existingReq) {
+    return reply.status(404).send({ message: 'Request not found' });
+  }
+
+  const userId = request.user.id;
+  const userRole = request.user.role;
+
+  if (userRole !== 'ADMIN') {
+    const techProfile = await prisma.technicianProfile.findUnique({
+      where: { userId }
+    });
+
+    if (!techProfile || existingReq.technicianId !== techProfile.id) {
+      return reply.status(403).send({ message: 'You are not assigned to this request.' });
+    }
   }
 
   const dataToUpdate: any = { status: result.data.status };
@@ -370,20 +457,67 @@ export async function cancelCustomerRequestHandler(request: FastifyRequest<{ Par
 }
 
 export async function getMessagesHandler(req: any, reply: any) {
+  const { requestId } = req.params;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+
+  const assistanceReq = await prisma.assistanceRequest.findUnique({
+    where: { id: requestId },
+    include: { technician: true }
+  });
+
+  if (!assistanceReq) {
+    return reply.status(404).send({ message: 'Request not found' });
+  }
+
+  const isCustomer = assistanceReq.customerId === userId;
+  const isAssignedTech = assistanceReq.technician?.userId === userId;
+  const isAdmin = userRole === 'ADMIN';
+
+  if (!isCustomer && !isAssignedTech && !isAdmin) {
+    return reply.status(403).send({ message: 'Unauthorized to view messages for this request' });
+  }
+
   const messages = await prisma.message.findMany({
-    where: { requestId: req.params.requestId },
+    where: { requestId },
     orderBy: { createdAt: 'asc' },
   });
   return reply.send(messages);
 }
 
 export async function sendMessageHandler(req: any, reply: any) {
+  const { requestId } = req.params;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+
+  if (!text || text.length > 2000) {
+    return reply.status(400).send({ message: 'Message text must be between 1 and 2000 characters' });
+  }
+
+  const assistanceReq = await prisma.assistanceRequest.findUnique({
+    where: { id: requestId },
+    include: { technician: true }
+  });
+
+  if (!assistanceReq) {
+    return reply.status(404).send({ message: 'Request not found' });
+  }
+
+  const isCustomer = assistanceReq.customerId === userId;
+  const isAssignedTech = assistanceReq.technician?.userId === userId;
+  const isAdmin = userRole === 'ADMIN';
+
+  if (!isCustomer && !isAssignedTech && !isAdmin) {
+    return reply.status(403).send({ message: 'Unauthorized to send messages for this request' });
+  }
+
   const msg = await prisma.message.create({
     data: {
-      requestId: req.params.requestId,
-      senderId: req.user.id,
-      senderRole: req.user.role,
-      text: req.body.text,
+      requestId,
+      senderId: userId,
+      senderRole: userRole,
+      text,
     },
   });
   getIO()?.emit('data_updated');

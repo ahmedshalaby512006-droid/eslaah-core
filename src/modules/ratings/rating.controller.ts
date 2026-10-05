@@ -26,6 +26,10 @@ export async function createRatingHandler(request: FastifyRequest, reply: Fastif
     return reply.status(403).send({ message: 'Unauthorized to rate this request' });
   }
 
+  if (requestRecord.status !== 'COMPLETED') {
+    return reply.status(400).send({ message: 'Only completed requests can be rated' });
+  }
+
   const existingRating = await prisma.rating.findUnique({
     where: { requestId: result.data.requestId },
   });

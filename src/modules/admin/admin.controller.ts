@@ -1,4 +1,4 @@
-﻿import { getIO } from '../../server';
+import { getIO } from '../../server';
 import { FastifyReply, FastifyRequest } from 'fastify';
 import { PrismaClient } from '@prisma/client';
 
@@ -28,8 +28,18 @@ export async function getAdminUsersHandler(req: any, reply: FastifyReply) {
   const { role } = req.query as any;
   const users = await prisma.user.findMany({
     where: role ? { role } : undefined,
-    include: {
-      technicianProfile: true
+    select: {
+      id: true,
+      email: true,
+      fullName: true,
+      phoneNumber: true,
+      nationalId: true,
+      role: true,
+      isBanned: true,
+      isOnline: true,
+      lastSeen: true,
+      createdAt: true,
+      technicianProfile: true,
     },
     orderBy: { createdAt: 'desc' }
   });
@@ -38,12 +48,28 @@ export async function getAdminUsersHandler(req: any, reply: FastifyReply) {
 
 export async function toggleBanUserHandler(req: any, reply: FastifyReply) {
   const { id } = req.params;
+  if (id === req.user?.id) {
+    return reply.status(400).send({ message: 'Cannot ban your own account' });
+  }
+
   const user = await prisma.user.findUnique({ where: { id } });
   if (!user) return reply.status(404).send({ message: 'User not found' });
   
   const updated = await prisma.user.update({
     where: { id },
-    data: { isBanned: !user.isBanned }
+    data: { isBanned: !user.isBanned },
+    select: {
+      id: true,
+      email: true,
+      fullName: true,
+      phoneNumber: true,
+      nationalId: true,
+      role: true,
+      isBanned: true,
+      isOnline: true,
+      lastSeen: true,
+      createdAt: true,
+    }
   });
   getIO()?.emit('data_updated');
   return reply.send(updated);
