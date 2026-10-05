@@ -1,4 +1,4 @@
-﻿import { Server as SocketIOServer } from 'socket.io';
+import { Server as SocketIOServer } from 'socket.io';
 import fastify from 'fastify';
 import cors from '@fastify/cors';
 import sensible from '@fastify/sensible';
@@ -55,7 +55,7 @@ const start = async () => {
     await app.ready();
     io = new SocketIOServer(app.server, {
       cors: {
-        origin: 'http://localhost:5173',
+        origin: true,
         credentials: true
       }
     });
