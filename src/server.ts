@@ -18,7 +18,7 @@ const prisma = new PrismaClient();
 const redis = new Redis(process.env.REDIS_URL || '');
 
 app.register(cors, {
-  origin: 'http://localhost:5173',
+  origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
 });
