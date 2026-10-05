@@ -7,7 +7,6 @@ import {
   getActiveCustomerRequestHandler,
   getActiveTechnicianRequestHandler,
   cancelCustomerRequestHandler,
-  technicianCancelJobHandler,
   getMessagesHandler,
   sendMessageHandler,
   getAllRequestsHandler,
@@ -32,7 +31,6 @@ export async function requestRoutes(fastify: FastifyInstance) {
   fastify.get('/technician/:techId', { preHandler: [authenticate as any] }, getTechnicianProfileHandler);
   fastify.patch('/:id/status', { preHandler: [authenticate as any, authorizeRoles('TECHNICIAN', 'ENGINEER') as any] }, updateStatusHandler);
   fastify.patch('/:id/cancel', { preHandler: [authenticate as any, authorizeRoles('CUSTOMER') as any] }, cancelCustomerRequestHandler);
-  fastify.patch('/:id/tech-cancel', { preHandler: [authenticate as any, authorizeRoles('TECHNICIAN', 'ENGINEER') as any] }, technicianCancelJobHandler);
   fastify.get('/:requestId/messages', { preHandler: [authenticate as any] }, getMessagesHandler);
   fastify.post('/:requestId/messages', { preHandler: [authenticate as any] }, sendMessageHandler);
 }
