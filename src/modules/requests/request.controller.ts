@@ -346,27 +346,78 @@ export async function cancelCustomerRequestHandler(request: FastifyRequest<{ Par
   const { id } = request.params;
   const customerId = request.user.id;
 
-  const updated = await prisma.assistanceRequest.updateMany({
-    where: {
-      id,
-      customerId,
-      status: 'QUEUED',
-    },
+  const currentReq = await prisma.assistanceRequest.findFirst({
+    where: { id, customerId }
+  });
+
+  if (!currentReq) {
+    return reply.status(404).send({ message: 'الطلب غير موجود.' });
+  }
+
+  if (currentReq.status === 'COMPLETED') {
+    return reply.status(400).send({ message: 'لا يمكن إلغاء طلب مكتمل بالفعل.' });
+  }
+
+  if (currentReq.status === 'CANCELLED') {
+    return reply.status(400).send({ message: 'الطلب ملغي بالفعل.' });
+  }
+
+  await prisma.assistanceRequest.update({
+    where: { id },
     data: {
       status: 'CANCELLED',
     },
   });
 
-  if (updated.count === 0) {
-    return reply.status(409).send({ message: 'Cannot cancel request: already accepted by technician or completed.' });
-  }
-
   // Delete offers
   await prisma.requestOffer.deleteMany({ where: { requestId: id } });
 
   getIO()?.emit('data_updated');
-  getIO()?.emit('request_cancelled', { requestId: id });
+  getIO()?.emit('request_cancelled', {
+    requestId: id,
+    technicianId: currentReq.technicianId,
+    customerId
+  });
+  getIO()?.emit('status_changed', { requestId: id, status: 'CANCELLED' });
+
   return reply.status(200).send({ message: 'Request cancelled successfully.' });
+}
+
+export async function technicianCancelJobHandler(request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) {
+  const { id } = request.params;
+  const userId = (request.user as any).id;
+
+  const techProfile = await prisma.technicianProfile.findUnique({
+    where: { userId }
+  });
+  if (!techProfile) {
+    return reply.status(404).send({ message: 'Technician profile not found.' });
+  }
+
+  const currentReq = await prisma.assistanceRequest.findFirst({
+    where: { id, technicianId: techProfile.id }
+  });
+  if (!currentReq) {
+    return reply.status(404).send({ message: 'Job not found or not assigned to you.' });
+  }
+
+  if (currentReq.status === 'COMPLETED' || currentReq.status === 'CANCELLED') {
+    return reply.status(400).send({ message: 'Job is already completed or cancelled.' });
+  }
+
+  // Release the request back to QUEUED so other technicians can help the customer
+  await prisma.assistanceRequest.update({
+    where: { id },
+    data: {
+      status: 'QUEUED',
+      technicianId: null,
+      acceptedAt: null,
+    }
+  });
+
+  getIO()?.emit('data_updated');
+  getIO()?.emit('status_changed', { requestId: id, status: 'QUEUED' });
+  return reply.status(200).send({ message: 'Job released back to queue successfully.' });
 }
 
 export async function getMessagesHandler(req: any, reply: any) {
