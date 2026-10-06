@@ -12,6 +12,7 @@ import { requestRoutes } from './modules/requests/request.routes';
 import { ratingRoutes } from './modules/ratings/rating.routes';
 import { disputeRoutes } from './modules/disputes/dispute.routes';
 import { adminRoutes } from './modules/admin/admin.routes';
+import { notificationRoutes } from './modules/notifications/notification.routes';
 
 const app = fastify({ logger: true });
 const prisma = new PrismaClient();
@@ -32,6 +33,7 @@ app.register(requestRoutes, { prefix: '/api/v1/requests' });
 app.register(ratingRoutes, { prefix: '/api/v1/ratings' });
 app.register(disputeRoutes, { prefix: '/api/v1/disputes' });
 app.register(adminRoutes, { prefix: '/api/v1/admin' });
+app.register(notificationRoutes, { prefix: '/api/v1/notifications' });
 
 app.get('/health', async () => {
   const redisPing = await redis.ping();

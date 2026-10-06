@@ -2,6 +2,7 @@ import { getIO } from '../../server';
 import { FastifyReply, FastifyRequest } from 'fastify';
 import { PrismaClient } from '@prisma/client';
 import { createAssistanceRequestSchema, updateRequestStatusSchema } from './request.schema';
+import { sendPushToUser } from '../../common/services/notification.service';
 
 async function extractCoordinates(input: string): Promise<{ lat: number; lng: number } | null> {
   if (!input || typeof input !== 'string') return null;
@@ -137,6 +138,31 @@ export async function createRequestHandler(request: FastifyRequest, reply: Fasti
   `;
 
   getIO()?.emit('data_updated');
+
+  // Push notifications to eligible/online technicians
+  try {
+    const techProfiles = await prisma.technicianProfile.findMany({
+      where: { isOnline: true },
+      select: { userId: true, vehicleSpecialties: true, malfunctionSpecialties: true },
+      take: 50,
+    });
+    
+    for (const tp of techProfiles) {
+      const matchVehicle = !tp.vehicleSpecialties?.length || tp.vehicleSpecialties.includes(vehicleType);
+      const matchMalfunc = !tp.malfunctionSpecialties?.length || tp.malfunctionSpecialties.includes(malfunctionCategory);
+      if (matchVehicle && matchMalfunc) {
+        sendPushToUser(tp.userId, {
+          title: '🚗 طلب صيانة جديد متاح الآن!',
+          body: `يوجد طلب صيانة سيارة جديد (${malfunctionCategory}). اضغط لتقديم عرضك.`,
+          url: '/tech/dashboard',
+          tag: `new-req-${newRequest.id}`,
+        }).catch(() => {});
+      }
+    }
+  } catch (err) {
+    console.error('Error sending tech push notifications:', err);
+  }
+
   return reply.status(201).send({ ...newRequest, offers: [] });
 }
 
@@ -287,6 +313,15 @@ export async function acceptRequestHandler(request: any, reply: any) {
 
     getIO()?.emit('data_updated');
     getIO()?.emit('offer_received', { customerId: req.customerId, technicianId: techProfile.id });
+
+    // Send push notification to the customer
+    sendPushToUser(req.customerId, {
+      title: '🔧 عرض صيانة جديد!',
+      body: 'قام فني صيانة بتقديم عرض لمساعدتك. اضغط لمراجعة العرض.',
+      url: '/customer/dashboard',
+      tag: `offer-${id}`,
+    }).catch(() => {});
+
     return reply.status(200).send({ success: true, message: 'Offer sent' });
   } catch (e: any) {
     return reply.status(400).send({ message: e.message || 'Error sending offer' });
@@ -337,6 +372,23 @@ export async function acceptTechnicianOfferHandler(request: any, reply: any) {
 
     getIO()?.emit('data_updated');
     getIO()?.emit('request_accepted', { customerId, technicianId });
+
+    // Send push notification to the accepted technician
+    try {
+      const tech = await prisma.technicianProfile.findUnique({
+        where: { id: technicianId },
+        select: { userId: true },
+      });
+      if (tech?.userId) {
+        sendPushToUser(tech.userId, {
+          title: '🎉 مبروك! تم قبول عرضك',
+          body: 'وافق العميل على عرض الصيانة الخاص بك. اضغط لبدء التوجه للعميل.',
+          url: '/tech/dashboard',
+          tag: `accepted-${id}`,
+        }).catch(() => {});
+      }
+    } catch {}
+
     return reply.send({ success: true });
   } catch (err: any) {
     if (err.message === 'TECHNICIAN_BUSY') {
@@ -426,6 +478,32 @@ export async function updateStatusHandler(request: FastifyRequest<{ Params: { id
 
   getIO()?.emit('data_updated');
   getIO()?.emit('status_changed', { requestId: id, status: result.data.status });
+
+  // Push notifications to customer on status transitions
+  const statusTitles: Record<string, { title: string; body: string }> = {
+    'ARRIVED': {
+      title: '📍 وصل الفني إلى موقعك!',
+      body: 'الفني وصل لموقع سيارتك وهو بانتظارك الآن لبدء العمل.',
+    },
+    'IN_PROGRESS': {
+      title: '⚙️ بدأت عملية الصيانة',
+      body: 'يقوم الفني الآن بفحص وإصلاح سيارتك.',
+    },
+    'COMPLETED': {
+      title: '✅ اكتملت الصيانة بنجاح!',
+      body: 'تم الانتهاء من تصليح سيارتك. نتمنى لك رحلة آمنة، يرجى تقييم الفني.',
+    },
+  };
+
+  if (statusTitles[result.data.status] && existingReq.customerId) {
+    sendPushToUser(existingReq.customerId, {
+      title: statusTitles[result.data.status].title,
+      body: statusTitles[result.data.status].body,
+      url: '/customer/dashboard',
+      tag: `status-${id}-${result.data.status}`,
+    }).catch(() => {});
+  }
+
   return reply.status(200).send(updated);
 }
 
@@ -521,6 +599,26 @@ export async function sendMessageHandler(req: any, reply: any) {
     },
   });
   getIO()?.emit('data_updated');
+
+  // Push notifications for chat messages
+  if (userId === assistanceReq.customerId) {
+    if (assistanceReq.technician?.userId) {
+      sendPushToUser(assistanceReq.technician.userId, {
+        title: '💬 رسالة جديدة من العميل',
+        body: text.length > 80 ? text.substring(0, 77) + '...' : text,
+        url: '/tech/dashboard',
+        tag: `msg-${requestId}`,
+      }).catch(() => {});
+    }
+  } else {
+    sendPushToUser(assistanceReq.customerId, {
+      title: '💬 رسالة جديدة من الفني',
+      body: text.length > 80 ? text.substring(0, 77) + '...' : text,
+      url: '/customer/dashboard',
+      tag: `msg-${requestId}`,
+    }).catch(() => {});
+  }
+
   return reply.status(201).send(msg);
 }
 
