@@ -63,9 +63,9 @@ export async function sendPushToUser(userId: string, payload: PushNotificationPa
     title: payload.title,
     body: payload.body,
     url: payload.url || '/',
-    tag: payload.tag || 'eslaah-alert',
-    icon: payload.icon || '/favicon.svg',
-    badge: payload.badge || '/favicon.svg',
+    tag: payload.tag || `eslaah-${Date.now()}`,
+    icon: payload.icon || '/icon-192.png',
+    badge: payload.badge || '/badge-72.png',
   });
 
   const sendPromises = subs.map(async (subStr) => {
