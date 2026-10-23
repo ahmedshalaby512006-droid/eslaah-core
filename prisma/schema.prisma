@@ -81,6 +81,7 @@ model User {
   authoredDisputes  Dispute[]           @relation("AuthoredDisputes")
   receivedDisputes  Dispute[]           @relation("TargetedDisputes")
   auditLogs         AuditLog[]
+  emergencyIncidents EmergencyIncident[] @relation("UserEmergencyIncidents")
   isOnline          Boolean             @default(false) @map("is_online")
   lastSeen          DateTime            @default(now()) @map("last_seen")
 
@@ -222,4 +223,36 @@ model RequestOffer {
 
   @@unique([requestId, technicianId])
   @@map("request_offers")
+}
+
+enum IncidentType {
+  ROAD_ACCIDENT
+  SUDDEN_BREAKDOWN
+}
+
+enum IncidentStatus {
+  PENDING
+  VERIFIED
+  RESOLVED
+  CANCELLED
+}
+
+model EmergencyIncident {
+  id           String         @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  reporterId   String         @map("reporter_id") @db.Uuid
+  reporter     User           @relation("UserEmergencyIncidents", fields: [reporterId], references: [id], onDelete: Cascade)
+  incidentType IncidentType   @map("incident_type")
+  status       IncidentStatus @default(PENDING)
+  latitude     Float
+  longitude    Float
+  location     Unsupported("geometry(Point, 4326)")?
+  photoUrl     String?        @map("photo_url") @db.Text
+  description  String?        @db.Text
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime       @updatedAt @map("updated_at") @db.Timestamptz
+  resolvedAt   DateTime?      @map("resolved_at") @db.Timestamptz
+
+  @@index([status], name: "idx_emergency_status")
+  @@index([createdAt], name: "idx_emergency_created_at")
+  @@map("emergency_incidents")
 }
